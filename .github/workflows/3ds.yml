@@ -1,0 +1,49 @@
+name: Build engine3ds Project
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    name: Build 3DS Engine Project
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkitarm:latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive # Critical if your engine uses submodules
+
+      - name: Install 3DS Dependencies
+        run: |
+          # Sync pacman repositories and install core tools, 3D graphics libraries, and audio
+          dkp-pacman -Syu --noconfirm \
+            3ds-dev \
+            libctru \
+            citro3d \
+            citro2d \
+            picasso
+
+      - name: Build Project
+        run: |
+          # Explicitly set paths if the local environment acts up
+          export DEVKITPRO=/opt/devkitpro
+          export DEVKITARM=$DEVKITPRO/devkitARM
+          
+          # Clean old compilations and build
+          make clean
+          make
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine3ds-binaries
+          path: |
+            *.3dsx
+            *.elf
+            *.cia
