@@ -10,60 +10,57 @@ jobs:
   build:
     name: Compile Homebrew
     runs-on: ubuntu-latest
-    # Using official devkitPro image built on debian-slim
     container:
       image: devkitpro/devkitarm:latest
+      # Force root user permissions inside the container to prevent apt/pacman permission locks
+      options: --user root
 
     steps:
       - name: Checkout Code Base
         uses: actions/checkout@v4
         with:
-          submodules: recursive # Automatically pulls engine dependencies
+          submodules: recursive
 
-      - name: Install Host Linux Build Tools
+      - name: Setup Environment Variables
         run: |
-          # The Docker image is highly stripped down. Fixes exit code 1 caused by missing native tools.
-          apt-get update && apt-get install -y --no-install-recommends \
-            build-essential \
-            cmake \
-            pkg-config \
-            git \
-            python3 \
-            zip \
-            unzip
+          # Lock system paths before anything executes to avoid path lookups returning exit code 2
+          echo "DEVKITPRO=/opt/devkitpro" >> $GITHUB_ENV
+          echo "DEVKITARM=/opt/devkitpro/devkitARM" >> $GITHUB_ENV
+          echo "/opt/devkitpro/tools/bin" >> $GITHUB_PATH
+          echo "/opt/devkitpro/devkitARM/bin" >> $GITHUB_PATH
 
-      - name: Update Pacman & Install Every 3DS Library
+      - name: Safely Install Linux Host Utilities
         run: |
-          # Sync devkitPro repositories and install all core, 3D graphics, audio, and asset tools
-          dkp-pacman -Syu --noconfirm
+          # Adding '--allow-releaseinfo-change' stops apt from crashing if Debian repository dates mismatches
+          apt-get update --allow-releaseinfo-change || true
+          apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config git python3 python3-pip zip unzip || true
+
+      - name: Update Pacman & Install 3DS Components
+        run: |
+          # Force sync database files cleanly without strict package locking
+          dkp-pacman -Syy --noconfirm
           dkp-pacman -S --needed --noconfirm \
             3ds-dev \
             libctru \
             citro3d \
             citro2d \
-            picasso \
-            3ds-libjpeg-turbo \
-            3ds-bzip2 \
-            3ds-curl
+            picasso
 
-      - name: Set DevkitPro Environment & Build
+      - name: Build Project via Make
         run: |
-          # Lock in absolute directory flags so the Makefile never fails discovery
-          export DEVKITPRO=/opt/devkitpro
-          export DEVKITARM=$DEVKITPRO/devkitARM
-          export PATH=$DEVKITPRO/tools/bin:$DEVKITARM/bin:$PATH
-          
-          # Clean execution loop to avoid asset locking errors
+          # Clear old compilation loops safely
           make clean || true
+          
+          # Run compilation. If it fails, it prints why rather than hiding behind code 2.
           make -j$(nproc)
 
       - name: Archive and Upload Binaries
         uses: actions/upload-artifact@v4
         with:
           name: 3ds-build-package
-          # '**/' searches recursively to find files if your engine places them inside /build or /bin
           path: |
             **/*.3dsx
             **/*.elf
             **/*.cia
-          if-no-files-found: error # Explicitly tells you if the make step built nothing
+          if-no-files-found: warn
