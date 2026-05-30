@@ -1,49 +1,69 @@
-name: Build engine3ds Project
+name: Build Complete 3DS Project
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
   pull_request:
     branches: [ main, master ]
 
 jobs:
   build:
-    name: Build 3DS Engine Project
+    name: Compile Homebrew
     runs-on: ubuntu-latest
+    # Using official devkitPro image built on debian-slim
     container:
       image: devkitpro/devkitarm:latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code Base
         uses: actions/checkout@v4
         with:
-          submodules: recursive # Critical if your engine uses submodules
+          submodules: recursive # Automatically pulls engine dependencies
 
-      - name: Install 3DS Dependencies
+      - name: Install Host Linux Build Tools
         run: |
-          # Sync pacman repositories and install core tools, 3D graphics libraries, and audio
-          dkp-pacman -Syu --noconfirm \
+          # The Docker image is highly stripped down. Fixes exit code 1 caused by missing native tools.
+          apt-get update && apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            pkg-config \
+            git \
+            python3 \
+            zip \
+            unzip
+
+      - name: Update Pacman & Install Every 3DS Library
+        run: |
+          # Sync devkitPro repositories and install all core, 3D graphics, audio, and asset tools
+          dkp-pacman -Syu --noconfirm
+          dkp-pacman -S --needed --noconfirm \
             3ds-dev \
             libctru \
             citro3d \
             citro2d \
-            picasso
+            picasso \
+            3ds-libjpeg-turbo \
+            3ds-bzip2 \
+            3ds-curl
 
-      - name: Build Project
+      - name: Set DevkitPro Environment & Build
         run: |
-          # Explicitly set paths if the local environment acts up
+          # Lock in absolute directory flags so the Makefile never fails discovery
           export DEVKITPRO=/opt/devkitpro
           export DEVKITARM=$DEVKITPRO/devkitARM
+          export PATH=$DEVKITPRO/tools/bin:$DEVKITARM/bin:$PATH
           
-          # Clean old compilations and build
-          make clean
-          make
+          # Clean execution loop to avoid asset locking errors
+          make clean || true
+          make -j$(nproc)
 
-      - name: Upload Build Artifacts
+      - name: Archive and Upload Binaries
         uses: actions/upload-artifact@v4
         with:
-          name: engine3ds-binaries
+          name: 3ds-build-package
+          # '**/' searches recursively to find files if your engine places them inside /build or /bin
           path: |
-            *.3dsx
-            *.elf
-            *.cia
+            **/*.3dsx
+            **/*.elf
+            **/*.cia
+          if-no-files-found: error # Explicitly tells you if the make step built nothing
